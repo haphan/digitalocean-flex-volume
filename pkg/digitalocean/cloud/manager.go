@@ -20,17 +20,23 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io/ioutil"
+	"net/http"
 	"strings"
 	"time"
 
 	"github.com/digitalocean/godo"
+	doctx "github.com/digitalocean/godo/context"
 	"golang.org/x/oauth2"
 )
 
 const (
-	godoActionErrored  = "errored"
-	godoActionTimeSpan = 1000
-	devicePrefix       = "/dev/disk/by-id/scsi-0DO_Volume_"
+	godoActionErrored   = "errored"
+	godoActionCheckTick = 1000
+
+	// DevicePrefix for Digital Ocean mounts
+	DevicePrefix             = "/dev/disk/by-id/scsi-0DO_Volume_"
+	dropletRegionMetadataURL = "http://169.254.169.254/metadata/v1/region"
 )
 
 // DigitalOceanManager communicates with the DO API
@@ -56,7 +62,7 @@ func (t *tokenSource) Token() (*oauth2.Token, error) {
 func NewDigitalOceanManager(token string) (*DigitalOceanManager, error) {
 
 	if token == "" {
-		return nil, errors.New("Digital Ocean token must be informed")
+		return nil, errors.New("DigitalOcean token is empty")
 	}
 
 	tokenSource := &tokenSource{AccessToken: token}
@@ -78,7 +84,7 @@ func NewDigitalOceanManager(token string) (*DigitalOceanManager, error) {
 
 // GetAccount returns the token related account
 func (m *DigitalOceanManager) GetAccount() (*godo.Account, error) {
-	account, _, err := m.client.Account.Get(context.TODO())
+	account, _, err := m.client.Account.Get(doctx.TODO())
 	if err != nil {
 		return nil, err
 	}
@@ -87,7 +93,7 @@ func (m *DigitalOceanManager) GetAccount() (*godo.Account, error) {
 
 // GetDroplet retrieves the droplet by ID
 func (m *DigitalOceanManager) GetDroplet(dropletID int) (*godo.Droplet, error) {
-	droplet, _, err := m.client.Droplets.Get(context.TODO(), dropletID)
+	droplet, _, err := m.client.Droplets.Get(doctx.TODO(), dropletID)
 	if err != nil {
 		return nil, err
 	}
@@ -99,7 +105,7 @@ func (m *DigitalOceanManager) DropletList() ([]godo.Droplet, error) {
 	list := []godo.Droplet{}
 	opt := &godo.ListOptions{}
 	for {
-		droplets, resp, err := m.client.Droplets.List(context.TODO(), opt)
+		droplets, resp, err := m.client.Droplets.List(doctx.TODO(), opt)
 		if err != nil {
 			return nil, err
 		}
@@ -119,67 +125,88 @@ func (m *DigitalOceanManager) DropletList() ([]godo.Droplet, error) {
 	return list, nil
 }
 
+// GetVolume given an unique Digital Ocean identifier returns the volume
 func (m *DigitalOceanManager) GetVolume(volumeID string) (*godo.Volume, error) {
-	vol, _, err := m.client.Storage.GetVolume(context.TODO(), volumeID)
+	vol, _, err := m.client.Storage.GetVolume(doctx.TODO(), volumeID)
 	if err != nil {
 		return nil, err
 	}
 	return vol, nil
 }
 
-// AttachVolume attaches volume to given droplet
-// returns the path the disk is being attached to
-func (m *DigitalOceanManager) AttachVolume(volumeID string, dropletID int, timeout int) (string, error) {
+// GetVolumeByName retrieves a volume given the name
+// region will be obtained using this droplet's metadata
+func (m *DigitalOceanManager) GetVolumeByName(name string) (*godo.Volume, error) {
+	region, err := currentRegion()
+	if err != nil {
+		return nil, err
+	}
+	p := &godo.ListVolumeParams{
+		Name:   name,
+		Region: region,
+	}
+	vol, _, err := m.client.Storage.ListVolumes(doctx.TODO(), p)
+	if err != nil {
+		return nil, err
+	}
+
+	if len(vol) != 1 {
+		return nil, fmt.Errorf("found more than one volume named %q at region %q", name, region)
+	}
+
+	return &vol[0], nil
+}
+
+// AttachVolumeAndWait attaches volume to given droplet
+// it will wait until the attach action is completed
+func (m *DigitalOceanManager) AttachVolumeAndWait(volumeID string, dropletID int, timeout time.Duration) error {
+	action, _, err := m.client.StorageActions.Attach(doctx.TODO(), volumeID, dropletID)
+	if err != nil {
+		return err
+	}
+
+	err = m.waitVolumeActionCompleted(volumeID, action.ID, timeout)
+	if err != nil {
+		return err
+	}
+
+	return nil
+	// DevicePrefix + vol.Name, nil
+}
+
+// VolumeNameFromDevicePath given a device path returns a volume name
+func (m *DigitalOceanManager) VolumeNameFromDevicePath(device string) (string, error) {
+	if !strings.HasPrefix(device, DevicePrefix) {
+		return "", fmt.Errorf("device path %q does not seems to be a DigitalOcean volume", device)
+	}
+	return device[len(DevicePrefix):], nil
+}
+
+// DeviceFromVolumeID given a volumeID returns it's device path
+func (m *DigitalOceanManager) DeviceFromVolumeID(volumeID string) (string, error) {
 	vol, err := m.GetVolume(volumeID)
 	if err != nil {
 		return "", err
 	}
-
-	needAttach := true
-	for id := range vol.DropletIDs {
-		if id == dropletID {
-			needAttach = false
-		}
-	}
-
-	if needAttach {
-		action, _, err := m.client.StorageActions.Attach(context.TODO(), volumeID, dropletID)
-		if err != nil {
-			return "", err
-		}
-
-		err = m.waitVolumeActionCompleted(volumeID, action.ID, timeout)
-		if err != nil {
-			return "", err
-		}
-	}
-	return devicePrefix + vol.Name, nil
+	return DevicePrefix + vol.Name, nil
 }
 
-// VolumeIDFromDevice given a device path returns a volume ID
-func (m *DigitalOceanManager) VolumeIDFromDevice(device string) (string, error) {
-	if !strings.HasPrefix(device, devicePrefix) {
-		return "", fmt.Errorf("device path %q does not seems to be a Digital Ocean volume", device)
-	}
-	return device[len(devicePrefix):], nil
-}
-
-// DetachVolume detaches a disk to given droplet
-func (m *DigitalOceanManager) DetachVolume(volumeID string, dropletID int, timeout int) error {
+// DetachVolumeAndWait detaches a disk to given droplet
+func (m *DigitalOceanManager) DetachVolumeAndWait(volumeID string, dropletID int, timeout time.Duration) error {
 	vol, err := m.GetVolume(volumeID)
 	if err != nil {
 		return err
 	}
 
 	needDetach := false
-	for id := range vol.DropletIDs {
+	for _, id := range vol.DropletIDs {
 		if id == dropletID {
 			needDetach = true
 		}
 	}
 
 	if needDetach {
-		action, _, err := m.client.StorageActions.DetachByDropletID(context.TODO(), volumeID, dropletID)
+		action, _, err := m.client.StorageActions.DetachByDropletID(doctx.TODO(), volumeID, dropletID)
 		if err != nil {
 			return err
 		}
@@ -189,10 +216,14 @@ func (m *DigitalOceanManager) DetachVolume(volumeID string, dropletID int, timeo
 			return err
 		}
 	}
+
 	return nil
 
 }
 
+// FindDropletFromNodeName retrieves the droplet given the kubernetes node name
+// Droplet name and Node name should match.
+// If not, we will try to match the name with private and public IP
 func (m *DigitalOceanManager) FindDropletFromNodeName(node string) (*godo.Droplet, error) {
 
 	// try to find droplet with same name as the kubernetes node
@@ -226,34 +257,84 @@ func (m *DigitalOceanManager) FindDropletFromNodeName(node string) (*godo.Drople
 		}
 	}
 
-	return nil, fmt.Errorf("Couldn't match node name to droplet name, private IP or public IP")
+	return nil, fmt.Errorf("could not match node name to droplet name, private IP or public IP")
 }
 
-func (m *DigitalOceanManager) waitVolumeActionCompleted(volumeID string, actionID int, timeout int) error {
+func (m *DigitalOceanManager) waitVolumeActionCompleted(volumeID string, actionID int, timeout time.Duration) error {
 	var lastError error
-	start := time.Now()
 
+	ctx, cancel := context.WithTimeout(context.TODO(), timeout)
+	defer cancel()
+	ticker := time.NewTicker(time.Second * godoActionCheckTick)
+	defer ticker.Stop()
 	for {
-		action, _, err := m.client.StorageActions.Get(context.TODO(), volumeID, actionID)
-		if err != nil {
-			lastError = err
-		}
-		switch action.Status {
-		case godo.ActionCompleted:
-			return nil
-		case godoActionErrored:
-			return fmt.Errorf("There was and storage action error at Digital Ocean: %s", action.String())
-		case godo.ActionInProgress:
-		default:
-			return fmt.Errorf("Received unexpected action status %q from Digital Ocean", action.Status)
-		}
-		if time.Second*time.Duration(timeout) > time.Since(start) {
-			errMsg := "Timeout attaching volume " + volumeID
-			if lastError != nil {
-				errMsg += lastError.Error()
+		select {
+		case <-ticker.C:
+			action, _, err := m.client.StorageActions.Get(ctx, volumeID, actionID)
+			if err != nil {
+				lastError = err
 			}
-			return fmt.Errorf(errMsg)
+
+			if action.Status == godo.ActionCompleted {
+				return nil
+			}
+			if action.Status == godoActionErrored {
+				return fmt.Errorf("there was and storage action error at DigitalOcean: %s", action.String())
+			}
+			if action.Status != godo.ActionInProgress {
+				return fmt.Errorf("received unexpected action status %q from DigitalOcean", action.Status)
+			}
+		case <-ctx.Done():
+			msg := fmt.Sprintf("storage creation at DigitalOcean for volume %q timed out", volumeID)
+			if lastError != nil {
+				msg += ": " + lastError.Error()
+			}
+			return fmt.Errorf(msg)
 		}
-		time.Sleep(godoActionTimeSpan * time.Millisecond)
 	}
+
+	// for {
+	// 	action, _, err := m.client.StorageActions.Get(doctx.TODO(), volumeID, actionID)
+	// 	if err != nil {
+	// 		lastError = err
+	// 	}
+	// 	switch action.Status {
+	// 	case godo.ActionCompleted:
+	// 		return nil
+	// 	case godoActionErrored:
+	// 		return fmt.Errorf("There was and storage action error at Digital Ocean: %s", action.String())
+	// 	case godo.ActionInProgress:
+	// 	default:
+	// 		return fmt.Errorf("Received unexpected action status %q from Digital Ocean", action.Status)
+	// 	}
+	// 	if time.Second*timeout < time.Since(start) {
+	// 		errMsg := "Timeout attaching volume " + volumeID
+	// 		if lastError != nil {
+	// 			errMsg += lastError.Error()
+	// 		}
+	// 		return fmt.Errorf(errMsg)
+	// 	}
+	// 	time.Sleep(godoActionTimeSpan * time.Millisecond)
+	// }
+}
+
+// currentRegion returns the current region for the droplet
+func currentRegion() (string, error) {
+	resp, err := http.Get(dropletRegionMetadataURL)
+	if err != nil {
+		return "", err
+	}
+
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("error retrieving droplet region: %d", resp.StatusCode)
+	}
+
+	body, err := ioutil.ReadAll(resp.Body)
+	if err != nil {
+		return "", err
+	}
+
+	return string(body), nil
 }

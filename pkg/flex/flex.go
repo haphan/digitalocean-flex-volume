@@ -160,7 +160,7 @@ func NewFlexCommand(args []string) (*Command, error) {
 		// if len(fa) != 1 {
 		// 	return nil, fmt.Errorf("command %q requires mountdir parameter. FA=%+v", unmountCmd, fa)
 		// }
-		fc.mountdir = fa[0]
+		fc.device = fa[0]
 
 	case mountCmd:
 		// if len(fa) != 2 {
@@ -203,6 +203,8 @@ func (m *Manager) ExecuteCommand(fc *Command) (*DriverStatus, error) {
 	// 	return m.plugin.Init()
 	// case getVolumeNameCmd:
 	// 	return m.plugin.GetVolumeName(fc.options)
+	case initCmd:
+		return m.plugin.Init()
 	case attachCmd:
 		return m.plugin.Attach(fc.options, fc.nodeName)
 	case detachCmd:

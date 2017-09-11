@@ -28,9 +28,10 @@ _output/bin/%: $(GOFILES)
 	mkdir -p $(dir $@)
 	GOOS=$(word 1, $(subst /, ,$*)) go build $(GOFLAGS) -ldflags "$(LDFLAGS)" -o $@ github.com/StackPointCloud/digitalocean-flex-volume/cmd/$(notdir $@)
 
-_output/release/digitalocean-flex-volume.tar.gz: _output/bin/linux/digitalocean-flex-volume _output/bin/darwin/digitalocean-flex-volume
+_output/release/digitalocean-flex-volume.tar.gz: _output/bin/linux/digitalocean-flex-volume
 	mkdir -p $(dir $@)
-	tar czf $@ -C _output bin/linux/digitalocean-flex-volume bin/darwin/digitalocean-flex-volume
+	tar czf $@ -C _output/bin/linux digitalocean-flex-volume
+	# tar czf $@ _output/bin/linux/digitalocean-flex-volume
 
 vendor:
 	@glide update --strip-vendor

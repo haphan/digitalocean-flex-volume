@@ -46,7 +46,7 @@ func GetDigitalOceanToken() (string, error) {
 	}
 	glog.Infof("Could not find a valid configuration file at %s", tokenDefaultLocation)
 
-	return "", fmt.Errorf("No valid Digital Ocean tokens were found")
+	return "", fmt.Errorf("No valid Digital Ocean tokens were found: %s", err)
 }
 
 // Config contains Digital Ocean configuration items
