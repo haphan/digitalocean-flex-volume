@@ -13,7 +13,7 @@ The plugin needs to use the Digital Ocean token which should be configured in a 
 | Environment Variable              | default                    | Description                                                                                                                                   |
 |-----------------------------------|----------------------------|-----------------------------------------------------------------------------------------------------------------------------------------------|
 | `DIGITALOCEAN_TOKEN_FILE_PATH` | /etc/kubernetes/digitalocean.json | Complete path to the file containing the Digital Ocean Token     |
-| `DIGITALOCEAN_TOKEN`       | ""                | The token file takes precedence over this environment variable |
+| `DIGITALOCEAN_TOKEN`       |                 | The token file takes precedence over this environment variable |
 
 ## Troubleshoot
 
