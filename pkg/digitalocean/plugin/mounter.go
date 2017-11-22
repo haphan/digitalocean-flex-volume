@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"strings"
 
 	"github.com/StackPointCloud/digitalocean-flex-volume/pkg/flex"
 
@@ -69,6 +70,31 @@ func (v *VolumePlugin) isMounted(targetDir string) (bool, error) {
 	return findmntText == targetDir, nil
 }
 
+func (v *VolumePlugin) currentFormat(device string) (string, error) {
+
+	lsblkCmd := exec.Command("lsblk", "-n", "-o", "FSTYPE", device)
+	lsblkOut, err := lsblkCmd.CombinedOutput()
+	if err != nil {
+		return "", fmt.Errorf("lsblk -n -o FSTYPE %s: output[%s] error[%s]", device, string(lsblkOut), err.Error())
+	}
+
+	output := strings.TrimSuffix(string(lsblkOut), "\n")
+	lines := strings.Split(output, "\n")
+	if lines[0] != "" {
+		// The device is formatted
+		return lines[0], nil
+	}
+
+	if len(lines) == 1 {
+		// The device is unformatted and has no dependent devices
+		return "", nil
+	}
+
+	// The device has dependent devices, most probably partitions (LVM, LUKS
+	// and MD RAID are reported as FSTYPE and caught above).
+	return "unknown data, probably partitions", nil
+}
+
 func (v *VolumePlugin) internalMount(targetDir string, device string, fsType string) error {
 	if fsType == "" {
 		// default to ext4
@@ -92,9 +118,16 @@ func (v *VolumePlugin) internalMount(targetDir string, device string, fsType str
 		return nil
 	}
 
-	mkfsCmd := exec.Command("mkfs", "-t", fsType, device)
-	if mkfsOut, err := mkfsCmd.CombinedOutput(); err != nil {
-		return fmt.Errorf("mkfs -t %s %s failed with error [%s] and output [%s]", fsType, device, err.Error(), string(mkfsOut))
+	format, err := v.currentFormat(device)
+	if err != nil {
+		return err
+	}
+
+	if format != fsType {
+		mkfsCmd := exec.Command("mkfs", "-t", fsType, device)
+		if mkfsOut, err := mkfsCmd.CombinedOutput(); err != nil {
+			return fmt.Errorf("mkfs -t %s %s failed with error [%s] and output [%s]", fsType, device, err.Error(), string(mkfsOut))
+		}
 	}
 
 	if err := os.MkdirAll(targetDir, 0777); err != nil {
