@@ -1,18 +1,18 @@
 
-# Digital Ocean Flex Volume
+# DigitalOcean Flex Volume
 
-This is a kubernetes FlexVolume driver for Digital Ocean.
+This is a kubernetes FlexVolume driver for DigitalOcean.
 
 ## Configuration
 
 Copy the plugin binary to the kubernetes volume plugin directory at every node, including master nodes.
 That binary will be used by kubelet and kube-configuration-manager.
 
-The plugin needs to use the Digital Ocean token which should be configured in a file or an environment variable:
+The plugin needs to use the DigitalOcean token which should be configured in a file or an environment variable:
 
 | Environment Variable              | default                    | Description                                                                                                                                   |
 |-----------------------------------|----------------------------|-----------------------------------------------------------------------------------------------------------------------------------------------|
-| `DIGITALOCEAN_TOKEN_FILE_PATH` | /etc/kubernetes/digitalocean.json | Complete path to the file containing the Digital Ocean Token     |
+| `DIGITALOCEAN_TOKEN_FILE_PATH` | /etc/kubernetes/digitalocean.json | Complete path to the file containing the DigitalOcean Token     |
 | `DIGITALOCEAN_TOKEN`       |                 | The token file takes precedence over this environment variable |
 
 ## Troubleshoot
